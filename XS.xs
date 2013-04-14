@@ -173,7 +173,7 @@ typedef IV (*liq_nonteminal_rule_t)(AV *, IV);
  *
  * Nonterminal routines typically adds continuations as symbol list
  * on the stack. The continuations just are same
- * as right hand sides of production in Bakus-Nauer Form.
+ * as right hand sides of production in Backus-Naur Form (BNF).
  * For example, let's look about the production for ESCAPE node.
  *
  *  block : ESCAPE value {make_escape} pipeline RR {append_first} block
