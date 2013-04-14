@@ -1,0 +1,7 @@
+Revision history for Perl extension Text::Liq::XS.
+
+0.01  Sun Apr 14 12:57:49 2013
+    + ported from Text::Liq pure perl version.
+    + tokenize XSUB.
+    + parse XSUB.
+    - render not yet XSUB, still pure perl.
