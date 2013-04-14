@@ -178,8 +178,11 @@ typedef IV (*liq_nonteminal_rule_t)(AV *, IV);
  *
  *  block : ESCAPE value {make_escape} pipeline RR {append_first} block
  *
- * where upper cases symbols are terminals, lower cases symbols 
- * If lookup next token is ESCAPE, then we get continuations
+ * where upper cases symbols are terminals, lower cases symbols
+ * are nonterminals, and braced symbols are synthesize attributes
+ * respectively.
+ *
+ * If lookup next token is ESCAPE, we get continuations
  * from right hand side expressions. Let's use unshift/shift array
  * as the current continuations list.
  *
