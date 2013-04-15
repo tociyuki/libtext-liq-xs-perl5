@@ -2977,39 +2977,104 @@ SV *
 liq_tokenize(SV *source)
 {
     U8 *csrc, *psrc, *esrc;
-    STRLEN nsrc, n; /* byte length */
+    STRLEN nsrc;
     UV c;
     IV u8src, state, read_char;
     AV *tokens, *token, *node;
-    SV *word;
     U8 *pplain, *eplain;
     U8 *pliteral, *eliteral;
-    IV pos, plain_start; /* character position not byte index */
-    IV token_start, token_kind, token_value;
+    IV pos, plain_start, token_start; /* character position not byte index */
+    IV token_kind, token_value;
+
+#define LIQ_TOKENIZE_READ_AND_JUMP(j) read_char = 1; state = j
+#define LIQ_TOKENIZE_PEEK_AND_JUMP(j) read_char = 0; state = j
+
+#define LIQ_TOKENIZE_SPACE_STAR(j) \
+    if (isSPACE_uni(c)) read_char = 1; else state = j
+
+#define LIQ_TOKENIZE_IS_MARKUP(s,n) (esrc - psrc > n && strnEQ(psrc, s, n))
+
+#define LIQ_TOKENIZE_MARKUP_AND_JUMP(n,k,j) \
+    psrc += n; pos += n; read_char = 1; token_kind = k; state = j
+
+#define LIQ_TOKENIZEx(k,x,c) \
+    token = newAV(); \
+    av_push(tokens, newRV_noinc((SV *)token)); \
+    av_push(token, newSViv(k)); \
+    av_push(token, x); \
+    av_push(token, newSViv(c))
+
+#define LIQ_TOKENIZEiv(k,v,c) \
+    token = newAV(); \
+    av_push(tokens, newRV_noinc((SV *)token)); \
+    av_push(token, newSViv(k)); \
+    av_push(token, newSViv(v)); \
+    av_push(token, newSViv(c))
+
+#define LIQ_TOKENIZE_CONSTx(x,c) \
+    token = newAV(); \
+    av_push(tokens, newRV_noinc((SV *)token)); \
+    av_push(token, newSViv(LIQ_CONST)); \
+    node = newAV(); \
+    av_push(token, newRV_noinc((SV *)node)); \
+    av_push(node, newSViv(LIQ_CONST)); \
+    av_push(node, x); \
+    av_push(token, newSViv(c))
+
+#define LIQ_TOKENIZEpvnu8(k,b,d,c) \
+    token = newAV(); \
+    av_push(tokens, newRV_noinc((SV *)token)); \
+    av_push(token, newSViv(k)); \
+    node = newAV(); \
+    av_push(token, newRV_noinc((SV *)node)); \
+    av_push(node, newSViv(k)); \
+    av_push(node, newSVpvn_utf8(b, d - b, u8src)); \
+    av_push(token, newSViv(c))
+
+#define LIQ_TOKENIZEpvn(k,b,d,c) \
+    token = newAV(); \
+    av_push(tokens, newRV_noinc((SV *)token)); \
+    av_push(token, newSViv(k)); \
+    node = newAV(); \
+    av_push(token, newRV_noinc((SV *)node)); \
+    av_push(node, newSViv(k)); \
+    av_push(node, newSVpvn(b, d - b)); \
+    av_push(token, newSViv(c))
+
+#define LIQ_TOKENIZEav(k,c) \
+    token = newAV(); \
+    av_push(tokens, newRV_noinc((SV *)token)); \
+    av_push(token, newSViv(k)); \
+    node = newAV(); \
+    av_push(token, newRV_noinc((SV *)node)); \
+    av_push(node, newSViv(k)); \
+    av_push(token, newSViv(c))
 
     /* relation ship between UV c variable and pointers and indexes.
      *
-     *   c = utf8_to_uvchr_buf(csrc, esrc, &u8skip);
-     *   psrc = csrc + u8skip;
+     *   c == utf8_to_uvchr_buf(csrc, esrc, &u8skip);
+     *   psrc == csrc + u8skip;
      *
      * in perl
      *
-     *   $c = substr $source, $pos - 1, 1;
+     *   $c eq substr $source, $pos - 1, 1;
      */
     psrc = SvPV(source, nsrc);
     csrc = psrc;
     esrc = psrc + nsrc;
     u8src = SvUTF8(source);
     pos = 0;
-    read_char = 1;
-    state = 0;
 
     tokens = (AV *)sv_2mortal((SV *)newAV());
+
     pplain = eplain = psrc;
     plain_start = token_start = pos;
     token_kind = LIQ_EOF;
+
+    LIQ_TOKENIZE_READ_AND_JUMP(0);
     while (1) {
         if (read_char) {
+            read_char = 0;
             if (psrc >= esrc) {
                 if (state == 0)
                     break;
@@ -3032,393 +3097,240 @@ liq_tokenize(SV *source)
                 pos++;
             }
         }
-        read_char = 0;
+
         switch (state) {
         /* $src =~ m{\G(.*?)(?:(\{\{\{?)\s*|\{%\s*(\w+)\s*)}gcmsx */
         case 0:
             if (c == '{') {
                 eplain = csrc;
                 token_start = pos - 1;
-                state = 1;          /* (.*?)_\{ */
+                LIQ_TOKENIZE_READ_AND_JUMP(1);  /* (.*?)_\{ */
             }
-            read_char = 1;
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(0);  /* (_.*?)\{ */
+            }
             break;
         case 1:
-            if (c == '{')
-                state = 2;          /* (.*?)\{_\{ */
-            else if (c == '%')
-                state = 3;          /* (.*?)\{_% */
-            else
-                state = 0;
-            read_char = 1;
+            if (c == '{') {
+                LIQ_TOKENIZE_READ_AND_JUMP(2);  /* (.*?)\{_\{ */
+            }
+            else if (c == '%') {
+                LIQ_TOKENIZE_READ_AND_JUMP(3);  /* (.*?)\{_% */
+            }
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(0);
+            }
             break;
         case 2:
-            token_kind = LIQ_ESCAPE;
             if (c == '{') {
                 token_kind = LIQ_NOESCAPE;
-                read_char = 1;      /* (.*?)\{\{_\{ */
+                LIQ_TOKENIZE_READ_AND_JUMP(6);  /* (.*?)\{\{_\{ */
             }
-            state = 6;
+            else {
+                token_kind = LIQ_ESCAPE;
+                LIQ_TOKENIZE_PEEK_AND_JUMP(6);  /* (.*?)\{\{_ */
+            }
             break;
         case 3:
-            if (isSPACE_uni(c))
-                read_char = 1;
-            else
-                state = 4;          /* (.*?)\{%\s*_ */
+            LIQ_TOKENIZE_SPACE_STAR(4); /* (.*?)\{%_\s* */
             break;
         case 4:
-            state = 0;
+            LIQ_TOKENIZE_PEEK_AND_JUMP(0);  /* default */
             switch (c) {
             case 'a':
-                if (esrc - psrc > 5 && strnEQ(psrc, "ssign", 5)) {
-                    psrc += 5;
-                    pos += 5;
-                    read_char = 1;
-                    token_kind = LIQ_ASSIGN;
-                    state = 5;
+                if (LIQ_TOKENIZE_IS_MARKUP("ssign", 5)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(5, LIQ_ASSIGN, 5);
                 }
                 break;
             case 'b':
-                if (esrc - psrc > 4 && strnEQ(psrc, "reak", 4)) {
-                    psrc += 4;
-                    pos += 4;
-                    read_char = 1;
-                    token_kind = LIQ_BREAK;
-                    state = 6;
+                if (LIQ_TOKENIZE_IS_MARKUP("reak", 4)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(4, LIQ_BREAK, 6);
                 }
                 break;
             case 'c':
-                if (esrc - psrc > 3 && strnEQ(psrc, "ase", 3)) {
-                    psrc += 3;
-                    pos += 3;
-                    read_char = 1;
-                    token_kind = LIQ_CASE;
-                    state = 5;
+                if (LIQ_TOKENIZE_IS_MARKUP("ase", 3)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(3, LIQ_CASE, 5);
                 }
-                else if (esrc - psrc > 6 && strnEQ(psrc, "apture", 6)) {
-                    psrc += 6;
-                    pos += 6;
-                    read_char = 1;
-                    token_kind = LIQ_CAPTURE;
-                    state = 5;
+                else if (LIQ_TOKENIZE_IS_MARKUP("apture", 6)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(6, LIQ_CAPTURE, 6);
                 }
-                else if (esrc - psrc > 7 && strnEQ(psrc, "ontinue", 7)) {
-                    psrc += 7;
-                    pos += 7;
-                    read_char = 1;
-                    token_kind = LIQ_CONTINUE;
-                    state = 6;
+                else if (LIQ_TOKENIZE_IS_MARKUP("ontinue", 7)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(7, LIQ_CONTINUE, 6);
                 }
-                else if (esrc - psrc > 4 && strnEQ(psrc, "ycle", 4)) {
-                    psrc += 4;
-                    pos += 4;
-                    read_char = 1;
-                    token_kind = LIQ_CYCLE;
-                    state = 5;
+                else if (LIQ_TOKENIZE_IS_MARKUP("ycle", 4)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(4, LIQ_CYCLE, 5);
                 }
-                else if (esrc - psrc > 6 && strnEQ(psrc, "omment", 6)) {
-                    psrc += 6;
-                    pos += 6;
-                    read_char = 1;
-                    token_kind = LIQ_COMMENT;
-                    state = 6;
+                else if (LIQ_TOKENIZE_IS_MARKUP("omment", 6)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(6, LIQ_COMMENT, 6);
                 }
                 break;
             case 'd':
-                if (esrc - psrc > 8 && strnEQ(psrc, "ecrement", 8)) {
-                    psrc += 8;
-                    pos += 8;
-                    read_char = 1;
-                    token_kind = LIQ_DECREMENT;
-                    state = 5;
+                if (LIQ_TOKENIZE_IS_MARKUP("ecrement", 8)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(8, LIQ_DECREMENT, 5);
                 }
                 break;
             case 'e':
-                if (esrc - psrc > 4 && strnEQ(psrc, "lsif", 4)) {
-                    psrc += 4;
-                    pos += 4;
-                    read_char = 1;
-                    token_kind = LIQ_ELSIF;
-                    state = 5;
+                if (LIQ_TOKENIZE_IS_MARKUP("lsif", 4)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(4, LIQ_ELSIF, 5);
                 }
-                else if (esrc - psrc > 3 && strnEQ(psrc, "lse", 3)) {
-                    psrc += 3;
-                    pos += 3;
-                    read_char = 1;
-                    token_kind = LIQ_ELSE;
-                    state = 6;
+                else if (LIQ_TOKENIZE_IS_MARKUP("lse", 3)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(3, LIQ_ELSE, 6);
                 }
-                else if (esrc - psrc > 6 && strnEQ(psrc, "ndcase", 6)) {
-                    psrc += 6;
-                    pos += 6;
-                    read_char = 1;
-                    token_kind = LIQ_ENDCASE;
-                    state = 6;
+                else if (LIQ_TOKENIZE_IS_MARKUP("ndcase", 6)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(6, LIQ_ENDCASE, 6);
                 }
-                else if (esrc - psrc > 5 && strnEQ(psrc, "ndfor", 5)) {
-                    psrc += 5;
-                    pos += 5;
-                    read_char = 1;
-                    token_kind = LIQ_ENDFOR;
-                    state = 6;
+                else if (LIQ_TOKENIZE_IS_MARKUP("ndfor", 5)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(5, LIQ_ENDFOR, 6);
                 }
-                else if (esrc - psrc > 11 && strnEQ(psrc, "ndifchanged", 11)) {
-                    psrc += 11;
-                    pos += 11;
-                    read_char = 1;
-                    token_kind = LIQ_ENDIFCHANGED;
-                    state = 6;
+                else if (LIQ_TOKENIZE_IS_MARKUP("ndifchanged", 11)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(11, LIQ_ENDIFCHANGED, 6);
                 }
-                else if (esrc - psrc > 4 && strnEQ(psrc, "ndif", 4)) {
-                    psrc += 4;
-                    pos += 4;
-                    read_char = 1;
-                    token_kind = LIQ_ENDIF;
-                    state = 6;
+                else if (LIQ_TOKENIZE_IS_MARKUP("ndif", 4)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(4, LIQ_ENDIF, 6);
                 }
-                else if (esrc - psrc > 9 && strnEQ(psrc, "ndcapture", 9)) {
-                    psrc += 9;
-                    pos += 9;
-                    read_char = 1;
-                    token_kind = LIQ_ENDCAPTURE;
-                    state = 6;
+                else if (LIQ_TOKENIZE_IS_MARKUP("ndcapture", 9)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(9, LIQ_ENDCAPTURE, 6);
                 }
-                else if (esrc - psrc > 8 && strnEQ(psrc, "ndunless", 8)) {
-                    psrc += 8;
-                    pos += 8;
-                    read_char = 1;
-                    token_kind = LIQ_ENDUNLESS;
-                    state = 6;
+                else if (LIQ_TOKENIZE_IS_MARKUP("ndunless", 8)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(8, LIQ_ENDUNLESS, 6);
                 }
                 break;
             case 'f':
-                if (esrc - psrc > 2 && strnEQ(psrc, "or", 2)) {
-                    psrc += 2;
-                    pos += 2;
-                    read_char = 1;
-                    token_kind = LIQ_FOR;
-                    state = 5;
+                if (LIQ_TOKENIZE_IS_MARKUP("or", 2)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(2, LIQ_FOR, 5);
                 }
                 break;
             case 'i':
-                if (esrc - psrc > 8 && strnEQ(psrc, "fchanged", 8)) {
-                    psrc += 8;
-                    pos += 8;
-                    read_char = 1;
-                    token_kind = LIQ_IFCHANGED;
-                    state = 6;
+                if (LIQ_TOKENIZE_IS_MARKUP("fchanged", 8)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(8, LIQ_IFCHANGED, 6);
                 }
-                else if (esrc - psrc > 1 && strnEQ(psrc, "f", 1)) {
-                    psrc += 1;
-                    pos += 1;
-                    read_char = 1;
-                    token_kind = LIQ_IF;
-                    state = 5;
+                else if (LIQ_TOKENIZE_IS_MARKUP("f", 1)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(1, LIQ_IF, 5);
                 }
-                else if (esrc - psrc > 8 && strnEQ(psrc, "ncrement", 8)) {
-                    psrc += 8;
-                    pos += 8;
-                    read_char = 1;
-                    token_kind = LIQ_INCREMENT;
-                    state = 5;
+                else if (LIQ_TOKENIZE_IS_MARKUP("ncrement", 8)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(8, LIQ_INCREMENT, 5);
                 }
-                else if (esrc - psrc > 6 && strnEQ(psrc, "nclude", 6)) {
-                    psrc += 6;
-                    pos += 6;
-                    read_char = 1;
-                    token_kind = LIQ_INCLUDE;
-                    state = 5;
+                else if (LIQ_TOKENIZE_IS_MARKUP("nclude", 6)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(6, LIQ_INCLUDE, 5);
                 }
                 break;
             case 'r':
-                if (esrc - psrc > 2 && strnEQ(psrc, "aw", 2)) {
-                    psrc += 2;
-                    pos += 2;
-                    read_char = 1;
-                    token_kind = LIQ_RAW;
-                    state = 6;
+                if (LIQ_TOKENIZE_IS_MARKUP("aw", 2)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(2, LIQ_RAW, 6);
                 }
                 break;
             case 'u':
-                if (esrc - psrc > 5 && strnEQ(psrc, "nless", 5)) {
-                    psrc += 5;
-                    pos += 5;
-                    read_char = 1;
-                    token_kind = LIQ_UNLESS;
-                    state = 5;
+                if (LIQ_TOKENIZE_IS_MARKUP("nless", 5)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(5, LIQ_UNLESS, 5);
                 }
                 break;
             case 'w':
-                if (esrc - psrc > 3 && strnEQ(psrc, "hen", 3)) {
-                    psrc += 3;
-                    pos += 3;
-                    read_char = 1;
-                    token_kind = LIQ_WHEN;
-                    state = 5;
+                if (LIQ_TOKENIZE_IS_MARKUP("hen", 3)) {
+                    LIQ_TOKENIZE_MARKUP_AND_JUMP(3, LIQ_WHEN, 5);
                 }
                 break;
             }
             break;
         case 5:
             if (isSPACE_uni(c)) {
-                read_char = 1;
-                state = 6;  /* \{%\s*\w+\s+_ */
+                LIQ_TOKENIZE_READ_AND_JUMP(6);  /* \{%\s*\w+_\s */
             }
             else {
-                state = 0;
+                LIQ_TOKENIZE_PEEK_AND_JUMP(0);  /* \{%\s*\w+_\S */
             }
             break;
         case 6:
             if (pplain < eplain) {
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_PLAIN));
-                node = newAV();
-                av_push(token, newRV_noinc((SV *)node));
-                av_push(node, newSViv(LIQ_PLAIN));
-                av_push(node, newSVpvn_utf8(pplain, eplain - pplain, u8src));
-                av_push(token, newSViv(plain_start));
+                LIQ_TOKENIZEpvnu8(LIQ_PLAIN, pplain, eplain, plain_start);
             }
-            if (token_kind == LIQ_RAW || token_kind == LIQ_COMMENT)
-                state = 29;
-            else if (token_kind == LIQ_CYCLE)
-                state = 40;
+            if (token_kind == LIQ_RAW || token_kind == LIQ_COMMENT) {
+                LIQ_TOKENIZE_PEEK_AND_JUMP(29);
+            }
+            else if (token_kind == LIQ_CYCLE) {
+                LIQ_TOKENIZE_PEEK_AND_JUMP(40);
+            }
             else {
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(token_kind));
-                av_push(token, newSViv(token_kind));
-                av_push(token, newSViv(token_start));
-                state = 7;
+                LIQ_TOKENIZEiv(token_kind, token_kind, token_start);
+                LIQ_TOKENIZE_PEEK_AND_JUMP(7);
             }
             break;
 
         /* $src =~ m{\G(?:$PUNCTTOK|$WORDTOK|$NUMTOK|$STRTOK)\s*}gcmsx */
         case 7:
-            if (isSPACE_uni(c))
-                read_char = 1;
-            else
-                state = 8;      /* \s*_ */
+            LIQ_TOKENIZE_SPACE_STAR(8);
             break;
 
         /* PUNCT */
         case 8:
             token_start = pos - 1;
             if (c == '}') {
-                read_char = 1;
-                state = 9;
+                LIQ_TOKENIZE_READ_AND_JUMP(9);
             }
             else if (c == '%') {
-                read_char = 1;
-                state = 11;
-            }
-            else if (isALPHA_uni(c)) {
-                pliteral = csrc;
-                read_char = 1;
-                state = 13;
+                LIQ_TOKENIZE_READ_AND_JUMP(11);
             }
             else if (c == '=') {
-                read_char = 1;
-                state = 14;
+                LIQ_TOKENIZE_READ_AND_JUMP(14);
             }
             else if (c == '!') {
-                read_char = 1;
-                state = 15;
+                LIQ_TOKENIZE_READ_AND_JUMP(15);
             }
             else if (c == '<') {
-                read_char = 1;
-                state = 16;
+                LIQ_TOKENIZE_READ_AND_JUMP(16);
             }
             else if (c == '>') {
-                read_char = 1;
-                state = 17;
+                LIQ_TOKENIZE_READ_AND_JUMP(17);
             }
             else if (c == '.') {
-                read_char = 1;
-                state = 18;
+                LIQ_TOKENIZE_READ_AND_JUMP(18);
             }
             else if (c == '\'') {
                 pliteral = psrc;
-                read_char = 1;
-                state = 19;
+                LIQ_TOKENIZE_READ_AND_JUMP(19);
             }
             else if (c == '"') {
                 pliteral = psrc;
-                read_char = 1;
-                state = 20;
+                LIQ_TOKENIZE_READ_AND_JUMP(20);
             }
             else if (c == '+' || c == '-') {
                 pliteral = csrc;
-                read_char = 1;
-                state = 21;
+                LIQ_TOKENIZE_READ_AND_JUMP(21);
             }
             else if (isDIGIT(c)) {
                 pliteral = csrc;
-                read_char = 1;
-                state = 22;
+                LIQ_TOKENIZE_READ_AND_JUMP(22);
+            }
+            else if (isALPHA_uni(c)) {
+                pliteral = csrc;
+                LIQ_TOKENIZE_READ_AND_JUMP(13);
             }
             else if (c == ',') {
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_COMMA));
-                av_push(token, newSViv(LIQ_COMMA));
-                av_push(token, newSViv(token_start));
-                read_char = 1;
-                state = 7;
+                LIQ_TOKENIZEiv(LIQ_COMMA, LIQ_COMMA, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);
             }
             else if (c == ':') {
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_COLON));
-                av_push(token, newSViv(LIQ_COLON));
-                av_push(token, newSViv(token_start));
-                read_char = 1;
-                state = 7;
+                LIQ_TOKENIZEiv(LIQ_COLON, LIQ_COLON, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);
             }
             else if (c == '|') {
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_FILTER));
-                av_push(token, newSViv(LIQ_FILTER));
-                av_push(token, newSViv(token_start));
-                read_char = 1;
-                state = 7;
+                LIQ_TOKENIZEiv(LIQ_FILTER, LIQ_FILTER, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);
             }
             else if (c == '[') {
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_LSQUARE));
-                av_push(token, newSViv(LIQ_LSQUARE));
-                av_push(token, newSViv(token_start));
-                read_char = 1;
-                state = 7;
+                LIQ_TOKENIZEiv(LIQ_LSQUARE, LIQ_LSQUARE, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);
             }
             else if (c == ']') {
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_RSQUARE));
-                av_push(token, newSViv(LIQ_RSQUARE));
-                av_push(token, newSViv(token_start));
-                read_char = 1;
-                state = 7;
+                LIQ_TOKENIZEiv(LIQ_RSQUARE, LIQ_RSQUARE, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);
             }
             else if (c == '(') {
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_LPAREN));
-                av_push(token, newSViv(LIQ_LPAREN));
-                av_push(token, newSViv(token_start));
-                read_char = 1;
-                state = 7;
+                LIQ_TOKENIZEiv(LIQ_LPAREN, LIQ_LPAREN, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);
             }
             else if (c == ')') {
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_RPAREN));
-                av_push(token, newSViv(LIQ_RPAREN));
-                av_push(token, newSViv(token_start));
-                read_char = 1;
-                state = 7;
+                LIQ_TOKENIZEiv(LIQ_RPAREN, LIQ_RPAREN, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);
             }
             else {
                 goto unexpected;
@@ -3427,22 +3339,16 @@ liq_tokenize(SV *source)
 
         /* R RR RR \}\}\}?|%\}\n? */
         case 9:
-            if (c != '}')
+            if (c == '}') {
+                LIQ_TOKENIZE_READ_AND_JUMP(10); /* \}_\} */
+            }
+            else {
                 goto unexpected;
-            read_char = 1;
-            state = 10;             /* \}_\} */
+            }
             break;
         case 10:
-            token_kind = LIQ_RR;
-            if (c == '}') {
-                token_kind = LIQ_RRR;
-                read_char = 1;     /* \}\}_\} */
-            }
-            token = newAV();
-            av_push(tokens, newRV_noinc((SV *)token));
-            av_push(token, newSViv(token_kind));
-            av_push(token, newSViv(token_kind));
-            av_push(token, newSViv(token_start));
+            token_kind = c == '}' ? LIQ_RRR : LIQ_RR;
+            LIQ_TOKENIZEiv(token_kind, token_kind, token_start);
             if (c != '\0' && token_kind == LIQ_RR) {
                 pplain = csrc;
                 plain_start = pos - 1;
@@ -3451,435 +3357,375 @@ liq_tokenize(SV *source)
                 pplain = psrc;
                 plain_start = pos;
             }
-            state = 0;
+            if (c == '}') {
+                LIQ_TOKENIZE_READ_AND_JUMP(0);
+            }
+            else {
+                LIQ_TOKENIZE_PEEK_AND_JUMP(0);
+            }
             break;
         case 11:
             if (c != '}')
                 goto unexpected;
-            token = newAV();
-            av_push(tokens, newRV_noinc((SV *)token));
-            av_push(token, newSViv(LIQ_R));
-            av_push(token, newSViv(LIQ_R));
-            av_push(token, newSViv(token_start));
+            LIQ_TOKENIZEiv(LIQ_R, LIQ_R, token_start);
             pplain = psrc;
             plain_start = pos;
-            read_char = 1;
-            state = 12;         /* %_\} */
+            LIQ_TOKENIZE_READ_AND_JUMP(12);     /* %_\} */
             break;
         case 12:
             if (c == '\n') {
-                read_char = 1;  /* %\}_\n? */
                 pplain = psrc;
                 plain_start = pos;
+                LIQ_TOKENIZE_READ_AND_JUMP(0);  /* %\}_\n */
             }
-            state = 0;
+            else {
+                LIQ_TOKENIZE_PEEK_AND_JUMP(0);
+            }
             break;
 
         /* IDENT or KEYWORD or CONST [[:alpha:]][[:alnum:]_]* */
         case 13:
             if (c == '_' || (isALNUM_uni(c))) {
-                read_char = 1;
+                LIQ_TOKENIZE_READ_AND_JUMP(13);
             }
             else {
-                /* neither is it keyword, const or ident? */
+                IV n;
+
+                token_kind = LIQ_IDENT;         /* default */
+                LIQ_TOKENIZE_PEEK_AND_JUMP(7);  /* default */
+
                 n = csrc - pliteral;
-                if (n == 3 && strnEQ(pliteral, "and", n))
-                    token_kind = token_value = LIQ_AND;
-                else if (n == 2 && strnEQ(pliteral, "or", n))
-                    token_kind = token_value = LIQ_OR;
-                else if (n == 3 && strnEQ(pliteral, "not", n))
-                    token_kind = token_value = LIQ_NOT;
-                else if (n == 3 && strnEQ(pliteral, "for", n))
-                    token_kind = token_value = LIQ_FOR;
-                else if (n == 4 && strnEQ(pliteral, "with", n))
-                    token_kind = token_value = LIQ_WITH;
-                else if (n == 8 && strnEQ(pliteral, "continue", n))
-                    token_kind = token_value = LIQ_CONTINUE;
-                else if (n == 8 && strnEQ(pliteral, "reversed", n))
-                    token_kind = token_value = LIQ_REVERSED;
-                else if (n == 2 && strnEQ(pliteral, "in", n))
-                    token_kind = token_value = LIQ_IN;
-                else if (n == 8 && strnEQ(pliteral, "contains", n)) {
-                    token_kind = LIQ_CMP;
-                    token_value = LIQ_CONTAINS;
-                }
-                else if (
-                       (n == 3 && strnEQ(pliteral, "nil", n))
-                    || (n == 4 && strnEQ(pliteral, "null", n))
-                    || (n == 4 && strnEQ(pliteral, "NULL", n))
-                ) {
-                    token_kind = LIQ_CONST;
-                    token = newAV();
-                    av_push(tokens, newRV_noinc((SV *)token));
-                    av_push(token, newSViv(LIQ_CONST));
-                    node = newAV();
-                    av_push(token, newRV_noinc((SV *)node));
-                    av_push(node, newSViv(LIQ_CONST));
-                    av_push(node, &PL_sv_undef);
-                    av_push(token, newSViv(token_start));
-                }
-                else if (n == 4 && strnEQ(pliteral, "true", n)) {
-                    token_kind = LIQ_CONST;
-                    token = newAV();
-                    av_push(tokens, newRV_noinc((SV *)token));
-                    av_push(token, newSViv(LIQ_CONST));
-                    node = newAV();
-                    av_push(token, newRV_noinc((SV *)node));
-                    av_push(node, newSViv(LIQ_CONST));
-                    av_push(node, newSViv(1));
-                    av_push(token, newSViv(token_start));
-                }
-                else if (n == 5 && strnEQ(pliteral, "false", n)) {
-                    token_kind = LIQ_CONST;
-                    token = newAV();
-                    av_push(tokens, newRV_noinc((SV *)token));
-                    av_push(token, newSViv(LIQ_CONST));
-                    node = newAV();
-                    av_push(token, newRV_noinc((SV *)node));
-                    av_push(node, newSViv(LIQ_CONST));
-                    av_push(node, newSVpvn("", 0));
-                    av_push(token, newSViv(token_start));
-                }
-                else if (n == 5 && strnEQ(pliteral, "empty", n)) {
-                    if (c == '?') {
-                        read_char = 1;
-                        token_kind = LIQ_IDENT;
-                        ++n;
-                    }
-                    else {
+                switch (n) {
+                case 2:
+                    if (strnEQ(pliteral, "or", n))
+                        token_kind = token_value = LIQ_OR;
+                    else if (strnEQ(pliteral, "in", n))
+                        token_kind = token_value = LIQ_IN;
+                    break;
+                case 3:
+                    if (strnEQ(pliteral, "and", n))
+                        token_kind = token_value = LIQ_AND;
+                    else if (strnEQ(pliteral, "not", n))
+                        token_kind = token_value = LIQ_NOT;
+                    else if (strnEQ(pliteral, "for", n))
+                        token_kind = token_value = LIQ_FOR;
+                    else if (strnEQ(pliteral, "nil", n)) {
                         token_kind = LIQ_CONST;
-                        token = newAV();
-                        av_push(tokens, newRV_noinc((SV *)token));
-                        av_push(token, newSViv(LIQ_CONST));
-                        node = newAV();
-                        av_push(token, newRV_noinc((SV *)node));
-                        av_push(node, newSViv(LIQ_CONST));
-                        av_push(node, newRV_noinc((SV *)newAV()));
-                        av_push(token, newSViv(token_start));
+                        LIQ_TOKENIZE_CONSTx(&PL_sv_undef, token_start);
                     }
+                    break;
+                case 4:
+                    if (strnEQ(pliteral, "with", n))
+                        token_kind = token_value = LIQ_WITH;
+                    else if (strnEQ(pliteral, "null", n)) {
+                        token_kind = LIQ_CONST;
+                        LIQ_TOKENIZE_CONSTx(&PL_sv_undef, token_start);
+                    }
+                    else if (strnEQ(pliteral, "NULL", n)) {
+                        token_kind = LIQ_CONST;
+                        LIQ_TOKENIZE_CONSTx(&PL_sv_undef, token_start);
+                    }
+                    else if (strnEQ(pliteral, "true", n)) {
+                        token_kind = LIQ_CONST;
+                        LIQ_TOKENIZE_CONSTx(newSViv(1), token_start);
+                    }
+                    break;
+                case 5:
+                    if (strnEQ(pliteral, "false", n)) {
+                        token_kind = LIQ_CONST;
+                        LIQ_TOKENIZE_CONSTx(newSVpvn("", 0), token_start);
+                    }
+                    else if (strnEQ(pliteral, "empty", n)) {
+                        if (c == '?') {
+                            ++n;
+                            LIQ_TOKENIZE_READ_AND_JUMP(7);
+                        }
+                        else {
+                            token_kind = LIQ_CONST;
+                            LIQ_TOKENIZE_CONSTx(
+                                newRV_noinc((SV *)newAV()), token_start);
+                        }
+                    }
+                    break;
+                case 8:
+                    if (strnEQ(pliteral, "continue", n))
+                        token_kind = token_value = LIQ_CONTINUE;
+                    else if (strnEQ(pliteral, "reversed", n))
+                        token_kind = token_value = LIQ_REVERSED;
+                    else if (strnEQ(pliteral, "contains", n)) {
+                        token_kind = LIQ_CMP;
+                        token_value = LIQ_CONTAINS;
+                    }
+                    break;
                 }
-                else {
-                    token_kind = LIQ_IDENT;
-                }
+
                 if (token_kind == LIQ_IDENT) {
-                    token = newAV();
-                    av_push(tokens, newRV_noinc((SV *)token));
-                    av_push(token, newSViv(LIQ_IDENT));
-                    av_push(token, newSVpvn_utf8(pliteral, n, u8src));
-                    av_push(token, newSViv(token_start));
+                    LIQ_TOKENIZEx(LIQ_IDENT,
+                        newSVpvn_utf8(pliteral, n, u8src), token_start);
                 }
                 else if (token_kind != LIQ_CONST) {
-                    token = newAV();
-                    av_push(tokens, newRV_noinc((SV *)token));
-                    av_push(token, newSViv(token_kind));
-                    av_push(token, newSViv(token_value));
-                    av_push(token, newSViv(token_start));
+                    LIQ_TOKENIZEiv(token_kind, token_value, token_start);
                 }
-                state = 7;
             }
             break;
 
         /* PUNCT PUNCT? */
         case 14:
-            token_kind = token_value = LIQ_EQUIV;   /* = */
             if (c == '=') {
-                token_kind = LIQ_CMP;
-                token_value = LIQ_EQ;
-                read_char = 1;                      /* == */
+                LIQ_TOKENIZEiv(LIQ_CMP, LIQ_EQ, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);      /* == */
             }
-            token = newAV();
-            av_push(tokens, newRV_noinc((SV *)token));
-            av_push(token, newSViv(token_kind));
-            av_push(token, newSViv(token_value));
-            av_push(token, newSViv(token_start));
-            state = 7;
+            else {
+                LIQ_TOKENIZEiv(LIQ_EQUIV, LIQ_EQUIV, token_start);
+                LIQ_TOKENIZE_PEEK_AND_JUMP(7);      /* = */
+            }
             break;
         case 15:
-            token_kind = token_value = LIQ_NOT;     /* ! */
             if (c == '=') {
-                token_kind = LIQ_CMP;
-                token_value = LIQ_NE;
-                read_char = 1;                      /* != */
+                LIQ_TOKENIZEiv(LIQ_CMP, LIQ_NE, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);      /* != */
             }
-            token = newAV();
-            av_push(tokens, newRV_noinc((SV *)token));
-            av_push(token, newSViv(token_kind));
-            av_push(token, newSViv(token_value));
-            av_push(token, newSViv(token_start));
-            state = 7;
+            else {
+                LIQ_TOKENIZEiv(LIQ_NOT, LIQ_NOT, token_start);
+                LIQ_TOKENIZE_PEEK_AND_JUMP(7);      /* ! */
+            }
             break;
         case 16:
-            token_kind = LIQ_CMP;
-            token_value = LIQ_LT;                   /* < */
             if (c == '=') {
-                token_value = LIQ_LE;
-                read_char = 1;                      /* <= */
+                LIQ_TOKENIZEiv(LIQ_CMP, LIQ_LE, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);      /* <= */
             }
             else if (c == '>') {
-                token_value = LIQ_NE;
-                read_char = 1;                      /* <> */
+                LIQ_TOKENIZEiv(LIQ_CMP, LIQ_NE, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);      /* <> */
             }
-            token = newAV();
-            av_push(tokens, newRV_noinc((SV *)token));
-            av_push(token, newSViv(token_kind));
-            av_push(token, newSViv(token_value));
-            av_push(token, newSViv(token_start));
-            state = 7;
+            else {
+                LIQ_TOKENIZEiv(LIQ_CMP, LIQ_LT, token_start);
+                LIQ_TOKENIZE_PEEK_AND_JUMP(7);      /* < */
+            }
             break;
         case 17:
-            token_kind = LIQ_CMP;
-            token_value = LIQ_GT;                   /* > */
             if (c == '=') {
-                token_value = LIQ_GE;
-                read_char = 1;                      /* >= */
+                LIQ_TOKENIZEiv(LIQ_CMP, LIQ_GE, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);      /* >= */
             }
-            token = newAV();
-            av_push(tokens, newRV_noinc((SV *)token));
-            av_push(token, newSViv(token_kind));
-            av_push(token, newSViv(token_value));
-            av_push(token, newSViv(token_start));
-            state = 7;
+            else {
+                LIQ_TOKENIZEiv(LIQ_CMP, LIQ_GT, token_start);
+                LIQ_TOKENIZE_PEEK_AND_JUMP(7);      /* > */
+            }
             break;
         case 18:
-            token_kind = token_value = LIQ_DOT;     /* [.] */
             if (c == '.') {
-                token_kind = token_value = LIQ_RANGE;
-                read_char = 1;                      /* [.][.] */
+                LIQ_TOKENIZEiv(LIQ_RANGE, LIQ_RANGE, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);      /* [.][.] */
             }
-            token = newAV();
-            av_push(tokens, newRV_noinc((SV *)token));
-            av_push(token, newSViv(token_kind));
-            av_push(token, newSViv(token_value));
-            av_push(token, newSViv(token_start));
-            state = 7;
+            else {
+                LIQ_TOKENIZEiv(LIQ_DOT, LIQ_DOT, token_start);
+                LIQ_TOKENIZE_PEEK_AND_JUMP(7);      /* [.] */
+            }
             break;
 
         /* STRING '(.*?)'|"(.*?)" */
         case 19:
             if (c == '\'') {            /* '(.*?)' */
-                n = csrc - pliteral;
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_STRING));
-                node = newAV();
-                av_push(token, newRV_noinc((SV *)node));
-                av_push(node, newSViv(LIQ_STRING));
-                av_push(node, newSVpvn_utf8(pliteral, n, u8src));
-                av_push(token, newSViv(token_start));
-                state = 7;
+                LIQ_TOKENIZEpvnu8(LIQ_STRING, pliteral, csrc, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);
             }
-            read_char = 1;
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(19);
+            }
             break;
         case 20:
             if (c == '"') {            /* "(.*?)" */
-                n = csrc - pliteral;
-                token = newAV();
-                av_push(tokens, newRV_noinc((SV *)token));
-                av_push(token, newSViv(LIQ_STRING));
-                node = newAV();
-                av_push(token, newRV_noinc((SV *)node));
-                av_push(node, newSViv(LIQ_STRING));
-                av_push(node, newSVpvn_utf8(pliteral, n, u8src));
-                av_push(token, newSViv(token_start));
-                state = 7;
+                LIQ_TOKENIZEpvnu8(LIQ_STRING, pliteral, csrc, token_start);
+                LIQ_TOKENIZE_READ_AND_JUMP(7);
             }
-            read_char = 1;
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(20);
+            }
             break;
 
         /* NUMBER  [+-]?\d+(?:[.]\d+)?([eE][+-]?\d+)? */
         case 21:
-            if (!(isDIGIT(c)))
+            if (isDIGIT(c)) {
+                LIQ_TOKENIZE_READ_AND_JUMP(22);         /* [+-]\d */
+            }
+            else {
                 goto unexpected;
-            read_char = 1;
-            state = 22;             /* [+-]\d */
+            }
             break;
         case 22:
             if (isDIGIT(c)) {
-                read_char = 1;
+                LIQ_TOKENIZE_READ_AND_JUMP(22);
             }
             else if (c == '.') {
                 if (*psrc == '.') {
-                    /* this is '..' range */
-                    state = 28;     /* [+-]?\d+ (?=[.][.]) */
+                    LIQ_TOKENIZE_PEEK_AND_JUMP(28); /* [+-]?\d+ (?=[.][.]) */
                 }
                 else {
-                    read_char = 1;
-                    state = 23;     /* [+-]?\d+[.] */
+                    LIQ_TOKENIZE_READ_AND_JUMP(23); /* [+-]?\d+[.] */
                 }
             }
             else if (c == 'e' || c == 'E') {
-                read_char = 1;
-                state = 25;         /* [+-]?\d+[eE] */
+                LIQ_TOKENIZE_READ_AND_JUMP(25);     /* [+-]?\d+[eE] */
             }
             else {
-                state = 28;         /* [+-]?\d+ */
+                LIQ_TOKENIZE_PEEK_AND_JUMP(28);     /* [+-]?\d+ */
             }
             break;
         case 23:
-            if (!(isDIGIT(c)))
+            if (isDIGIT(c)) {
+                LIQ_TOKENIZE_READ_AND_JUMP(24);     /* [+-]?\d+[.]\d */
+            }
+            else {
                 goto unexpected;
-            read_char = 1;
-            state = 24;             /* [+-]?\d+[.]\d */
+            }
             break;
         case 24:
             if (isDIGIT(c)) {
-                read_char = 1;
+                LIQ_TOKENIZE_READ_AND_JUMP(24);
             }
             else if (c == 'e' || c == 'E') {
-                read_char = 1;
-                state = 25;         /* [+-]?\d+[.]\d+[eE] */
+                LIQ_TOKENIZE_READ_AND_JUMP(25);     /* [+-]?\d+[.]\d+[eE] */
             }
             else {
-                state = 28;         /* [+-]?\d+[.]\d+ */
+                LIQ_TOKENIZE_PEEK_AND_JUMP(28);     /* [+-]?\d+[.]\d+ */
             }
             break;
-        case 25:
-            if (c == '+' || c == '-')
-                read_char = 1;
-            state = 26;             /* [+-]?\d+(?:[.]\d+)?[eE][+-]? */
+        case 25:                                    
+            if (c == '+' || c == '-') {
+                LIQ_TOKENIZE_READ_AND_JUMP(26); /* [+-]?\d+(?:[.]\d+)?[eE][+-] */
+            }
+            else {
+                LIQ_TOKENIZE_PEEK_AND_JUMP(26); /* [+-]?\d+(?:[.]\d+)?[eE] */
+            }
             break;
         case 26:
-            if (!(isDIGIT(c)))
+            if (isDIGIT(c)) {   /* [+-]?\d+(?:[.]\d+)?[eE][+-]?\d */
+                LIQ_TOKENIZE_READ_AND_JUMP(27);
+            }
+            else {
                 goto unexpected;
-            read_char = 1;
-            state = 27;             /* [+-]?\d+(?:[.]\d+)?[eE][+-]?\d */
+            }
             break;
         case 27:
-            if (isDIGIT(c))
-                read_char = 1;
-            else
-                state = 28;         /* [+-]?\d+(?:[.]\d+)?[eE][+-]?\d+ */
+            if (isDIGIT(c)) {           /* [+-]?\d+(?:[.]\d+)?[eE][+-]?\d\d* */
+                LIQ_TOKENIZE_READ_AND_JUMP(27);
+            }
+            else {
+                LIQ_TOKENIZE_PEEK_AND_JUMP(28);
+            }
             break;
         case 28:
-            n = csrc - pliteral;
-            token = newAV();
-            av_push(tokens, newRV_noinc((SV *)token));
-            av_push(token, newSViv(LIQ_NUMBER));
-            node = newAV();
-            av_push(token, newRV_noinc((SV *)node));
-            av_push(node, newSViv(LIQ_NUMBER));
-            av_push(node, newSVpvn(pliteral, n));
-            av_push(token, newSViv(token_start));
-            state = 7;              /* [+-]?\d+(?:[.]\d+)?(?:[eE][+-]?\d+)? */
+            LIQ_TOKENIZEpvn(LIQ_NUMBER, pliteral, csrc, token_start);
+            LIQ_TOKENIZE_PEEK_AND_JUMP(7);
             break;
 
         /* \{%\s*raw\s*_%\}\n?(.*?)\{%\s*endraw\s*%\}\n? */
         /* \{%\s*comment\s*_%\}.*?\{%\s*endcomment\s*%\}\n? */
         case 29:
-            if (c == '%')
-                state = 30;
-            else if (! (isSPACE(c)))
+            if (isSPACE_uni(c)) {
+                LIQ_TOKENIZE_READ_AND_JUMP(29);
+            }
+            else if (c == '%') {
+                LIQ_TOKENIZE_READ_AND_JUMP(30);
+            }
+            else {
                 goto unexpected;
-            read_char = 1;
+            }
             break;
         case 30:
             /* \{%\s*raw\s*%_\}\n?(.*?)\{%\s*endraw\s*%\}\n? */
             /* \{%\s*comment\s*%_\}.*?\{%\s*endcomment\s*%\}\n? */
             if (c == '}') {
                 pliteral = psrc;
-                state = 31;
+                LIQ_TOKENIZE_READ_AND_JUMP(31);
             }
             else {
                 goto unexpected;
             }
-            read_char = 1;
             break;
         case 31:
             /* \{%\s*raw\s*%\}_\n?(.*?)\{%\s*endraw\s*%\}\n? */
             /* \{%\s*comment\s*%\}_\n?.*?\{%\s*endcomment\s*%\}\n? */
             if (c == '\n') {
                 pliteral = psrc;
-                read_char = 1;
+                LIQ_TOKENIZE_READ_AND_JUMP(32);
             }
-            state = 32;
+            else {
+                LIQ_TOKENIZE_PEEK_AND_JUMP(32);
+            }
             break;
         case 32:
             /* \{%\s*raw\s*%\}\n?(_.*?)\{%\s*endraw\s*%\}\n? */
             /* \{%\s*comment\s*%\}\n?_.*?\{%\s*endcomment\s*%\}\n? */
-            if (c == '\0')
+            if (c == '{') {
+                LIQ_TOKENIZE_READ_AND_JUMP(33);
+            }
+            else if (c != '\0') {
+                LIQ_TOKENIZE_READ_AND_JUMP(32);
+            }
+            else {
                 goto unexpected;
-            else if (c == '{')
-                state = 33;
-            read_char = 1;
+            }
             break;
         case 33:
             /* \{%\s*raw\s*%\}\n?(.*?)\{_%\s*endraw\s*%\}\n? */
             /* \{%\s*comment\s*%\}\n?.*?\{_%\s*endcomment\s*%\}\n? */
             if (c == '%') {
                 eliteral = psrc - 2;
-                state = 34;
+                LIQ_TOKENIZE_READ_AND_JUMP(34);
             }
             else {
-                state = 32;
+                LIQ_TOKENIZE_READ_AND_JUMP(32);
             }
-            read_char = 1;
             break;
         case 34:
-            /* \{%\s*raw\s*%\}\n?(.*?)\{%_\s*endraw\s*%\}\n? */
-            /* \{%\s*comment\s*%\}\n?.*?\{%_\s*endcomment\s*%\}\n? */
-            if (isSPACE_uni(c))
-                read_char = 1;
-            else
-                state = 35;
+            LIQ_TOKENIZE_SPACE_STAR(35);
             break;
         case 35:
             /* \{%\s*raw\s*%\}\n?(.*?)\{%\s*_endraw\s*%\}\n? */
             /* \{%\s*comment\s*%\}\n?.*?\{%\s*_endcomment\s*%\}\n? */
-            read_char = 1;
-            state = 32;
-            if (c == 'e') {
-                if (token_kind == LIQ_RAW) {
-                    if (esrc - psrc > 5 && (strnEQ(psrc, "ndraw", 5))) {
-                        psrc += 5;
-                        pos += 5;
-                        state = 36;
-                    }
-                }
-                else if (token_kind == LIQ_COMMENT) {
-                    if (esrc - psrc > 9 && (strnEQ(psrc, "ndcomment", 9))) {
-                        psrc += 9;
-                        pos += 9;
-                        state = 36;
-                    }
-                }
+            if (token_kind == LIQ_RAW
+                && c == 'e' && (LIQ_TOKENIZE_IS_MARKUP("ndraw", 5))
+            ) {
+                LIQ_TOKENIZE_MARKUP_AND_JUMP(5, LIQ_RAW, 36);
+            }
+            else if (token_kind == LIQ_COMMENT
+                && c == 'e' && (LIQ_TOKENIZE_IS_MARKUP("ndcomment", 9))
+            ) {
+                LIQ_TOKENIZE_MARKUP_AND_JUMP(9, LIQ_COMMENT, 36);
+            }
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(32);
             }
             break;
         case 36:
-            /* \{%\s*raw\s*%\}\n?(.*?)\{%\s*endraw_\s*%\}\n? */
-            /* \{%\s*comment\s*%\}\n?.*?\{%\s*endcomment_\s*%\}\n? */
-            if (isSPACE_uni(c))
-                read_char = 1;
-            else
-                state = 37;
+            LIQ_TOKENIZE_SPACE_STAR(37);
             break;
         case 37:
             /* \{%\s*raw\s*%\}\n?(.*?)\{%\s*endraw\s*_%\}\n? */
             /* \{%\s*comment\s*%\}\n?.*?\{%\s*endcomment\s*_%\}\n? */
-            read_char = 1;
-            state = 32;
-            if (c == '%')
-                state = 38;
+            if (c == '%') {
+                LIQ_TOKENIZE_READ_AND_JUMP(38);
+            }
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(32);
+            }
             break;
         case 38:
             /* \{%\s*raw\s*%\}\n?(.*?)\{%\s*endraw\s*%_\}\n? */
             /* \{%\s*comment\s*%\}\n?.*?\{%\s*endcomment\s*%_\}\n? */
-            read_char = 1;
-            state = 32;
             if (c == '}') {
                 if (token_kind == LIQ_RAW && pliteral < eliteral) {
-                    n = eliteral - pliteral;
-                    token = newAV();
-                    av_push(tokens, newRV_noinc((SV *)token));
-                    av_push(token, newSViv(LIQ_PLAIN));
-                    node = newAV();
-                    av_push(token, newRV_noinc((SV *)node));
-                    av_push(node, newSViv(LIQ_PLAIN));
-                    av_push(node, newSVpvn_utf8(pliteral, n, u8src));
-                    av_push(token, newSViv(token_start));
+                    LIQ_TOKENIZEpvnu8(LIQ_PLAIN, pliteral, eliteral, token_start);
                 }
                 pplain = psrc;
                 plain_start = pos;
-                state = 39;
+                LIQ_TOKENIZE_READ_AND_JUMP(39);
+            }
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(32);
             }
             break;
         case 39:
@@ -3888,9 +3734,11 @@ liq_tokenize(SV *source)
             if (c == '\n') {
                 pplain = psrc;
                 plain_start = pos;
-                read_char = 1;
+                LIQ_TOKENIZE_READ_AND_JUMP(0);
             }
-            state = 0;
+            else {
+                LIQ_TOKENIZE_PEEK_AND_JUMP(0);
+            }
             break;
 
         /* CYCLEVALUE  ".*?" | '.*?' | \w[\w-]*
@@ -3898,27 +3746,19 @@ liq_tokenize(SV *source)
          *                $CYCLEVALUE\s*(?:,\s*$CYCLEVALUE\s*)*%\}\n?
          */
         case 40:
-            token = newAV();
-            av_push(tokens, newRV_noinc((SV *)token));
-            av_push(token, newSViv(LIQ_CYCLE));
-            node = newAV();
-            av_push(token, newRV_noinc((SV *)node));
-            av_push(node, newSViv(LIQ_CYCLE));
-            av_push(token, newSViv(token_start));
+            /* node = (AV *)(cycle node new) */
+            LIQ_TOKENIZEav(LIQ_CYCLE, token_start);
             if (c == '\'') {
                 pliteral = psrc;
-                read_char = 1;
-                state = 41;
+                LIQ_TOKENIZE_READ_AND_JUMP(41);
             }
             else if (c == '"') {
                 pliteral = psrc;
-                read_char = 1;
-                state = 42;
+                LIQ_TOKENIZE_READ_AND_JUMP(42);
             }
             else if (c == '_' || (isALNUM_uni(c))) {
                 pliteral = csrc;
-                read_char = 1;
-                state = 43;
+                LIQ_TOKENIZE_READ_AND_JUMP(43);
             }
             else {
                 goto unexpected;
@@ -3928,84 +3768,70 @@ liq_tokenize(SV *source)
             /* \{%\s*cycle\s*(?:'_.*?'\s*:\s*)?
              *                '_.*?'\s*(?:,\s*$CYCLEVALUE\s*)*%\}\n? */
            if (c == '\'') {
-                n = csrc - pliteral;
-                /* node soon owns word at state 45, so that not mortal */
-                word = newSVpvn_utf8(pliteral, n, u8src);
-                state = 44;
+                eliteral = csrc;
+                LIQ_TOKENIZE_READ_AND_JUMP(44);
             }
-            read_char = 1;
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(41);
+            }
             break;
         case 42:
             /* \{%\s*cycle\s*(?:"_.*?"\s*:\s*)?
              *                "_.*?"\s*(?:,\s*$CYCLEVALUE\s*)*%\}\n? */
             if (c == '"') {
-                n = csrc - pliteral;
-                word = newSVpvn_utf8(pliteral, n, u8src);
-                state = 44;
+                eliteral = csrc;
+                LIQ_TOKENIZE_READ_AND_JUMP(44);
             }
-            read_char = 1;
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(42);
+            }
             break;
         case 43:
             /* \{%\s*cycle\s*(?:\w_[\w-]*\s*:\s*)?
              *                \w_[\w-]*\s*(?:,\s*$CYCLEVALUE\s*)*%\}\n? */
             if (c == '-' || c == '_' || (isALNUM_uni(c))) {
-                read_char = 1;
+                LIQ_TOKENIZE_READ_AND_JUMP(43);
             }
             else {
-                n = csrc - pliteral;
-                word = newSVpvn_utf8(pliteral, n, u8src);
-                state = 44;
+                eliteral = csrc;
+                LIQ_TOKENIZE_PEEK_AND_JUMP(44);
             }
             break;
         case 44:
-            /* \{%\s*cycle\s*(?:$CYCLEVALUE_\s*:\s*)?
-             *                $CYCLEVALUE_\s*(?:,\s*$CYCLEVALUE\s*)*%\}\n? */
-            if (isSPACE_uni(c))
-                read_char = 1;
-            else
-                state = 45;
+            LIQ_TOKENIZE_SPACE_STAR(45);
             break;
         case 45:
             if (c == ':') {
                 /* \{%\s*cycle\s*$CYCLEVALUE\s*_:\s*
                  *               $CYCLEVALUE\s*(?:,\s*$CYCLEVALUE\s*)*%\}\n? */
-                av_push(node, word);
-                read_char = 1;
-                state = 46;
+                av_push(node, newSVpvn_utf8(pliteral, eliteral - pliteral, u8src));
+                LIQ_TOKENIZE_READ_AND_JUMP(46);
             }
             else {
                 /* \{%\s*cycle\s*
                  *               $CYCLEVALUE\s*_(?:,\s*$CYCLEVALUE\s*)*%\}\n? */
                 av_push(node, newSVpv("", 0));
-                av_push(node, word);
-                state = 52;
+                av_push(node, newSVpvn_utf8(pliteral, eliteral - pliteral, u8src));
+                LIQ_TOKENIZE_PEEK_AND_JUMP(52);
             }
             break;
         case 46:
-            /* \{%\s*cycle\s*$CYCLEVALUE\s*:_\s*
-             *               $CYCLEVALUE\s*(?:,\s*$CYCLEVALUE\s*)*%\}\n? */
-            if (isSPACE_uni(c))
-                read_char = 1;
-            else
-                state = 47;
+            LIQ_TOKENIZE_SPACE_STAR(47);
             break;
         case 47:
             /* \{%\s*cycle\s*(?:$CYCLEVALUE\s*:\s*)?
              *                _$CYCLEVALUE\s*(?:,\s*_$CYCLEVALUE\s*)*%\}\n? */
             if (c == '\'') {
                 pliteral = psrc;
-                read_char = 1;
-                state = 48;
+                LIQ_TOKENIZE_READ_AND_JUMP(48);
             }
             else if (c == '"') {
                 pliteral = psrc;
-                read_char = 1;
-                state = 49;
+                LIQ_TOKENIZE_READ_AND_JUMP(49);
             }
             else if (c == '_' || (isALNUM_uni(c))) {
                 pliteral = csrc;
-                read_char = 1;
-                state = 50;
+                LIQ_TOKENIZE_READ_AND_JUMP(50);
             }
             else {
                 goto unexpected;
@@ -4015,52 +3841,46 @@ liq_tokenize(SV *source)
             /* \{%\s*cycle\s*(?:$CYCLEVALUE\s*:\s*)?
              *                '_.*?'\s*(?:,\s*'_.*?'\s*)*%\}\n? */
             if (c == '\'') {
-                n = csrc - pliteral;
-                av_push(node, newSVpvn_utf8(pliteral, n, u8src));
-                state = 51;
+                av_push(node, newSVpvn_utf8(pliteral, csrc - pliteral, u8src));
+                LIQ_TOKENIZE_READ_AND_JUMP(51);
             }
-            read_char = 1;
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(48);
+            }
             break;
         case 49:
             /* \{%\s*cycle\s*(?:$CYCLEVALUE\s*:\s*)?
              *                "_.*?"\s*(?:,\s*"_.*?"\s*)*%\}\n? */
             if (c == '"') {
-                n = csrc - pliteral;
-                av_push(node, newSVpvn_utf8(pliteral, n, u8src));
-                state = 51;
+                av_push(node, newSVpvn_utf8(pliteral, csrc - pliteral, u8src));
+                LIQ_TOKENIZE_READ_AND_JUMP(51);
             }
-            read_char = 1;
+            else {
+                LIQ_TOKENIZE_READ_AND_JUMP(49);
+            }
             break;
         case 50:
             /* \{%\s*cycle\s*(?:$CYCLEVALUE\s*:\s*)?
              *                \w_[\w-]*\s*(?:,\s*\w_[\w-]*\s*)*%\}\n? */
             if (c == '-' || c == '_' || (isALNUM_uni(c))) {
-                read_char = 1;
+                LIQ_TOKENIZE_READ_AND_JUMP(50);
             }
             else {
-                n = csrc - pliteral;
-                av_push(node, newSVpvn_utf8(pliteral, n, u8src));
-                state = 51;
+                av_push(node, newSVpvn_utf8(pliteral, csrc - pliteral, u8src));
+                LIQ_TOKENIZE_PEEK_AND_JUMP(51);
             }
             break;
         case 51:
-            /* \{%\s*cycle\s*(?:$CYCLEVALUE\s*:\s*)?
-             *                $CYCLEVALUE_\s*(?:,\s*$CYCLEVALUE_\s*)*%\}\n? */
-            if (isSPACE_uni(c))
-                read_char = 1;
-            else
-                state = 52;
+            LIQ_TOKENIZE_SPACE_STAR(52);
             break;
         case 52:
             /* \{%\s*cycle\s*(?:$CYCLEVALUE\s*:\s*)?
              *                $CYCLEVALUE\s*(?:_,\s*$CYCLEVALUE\s*)*%\}\n? */
             if (c == ',') {
-                read_char = 1;
-                state = 46;
+                LIQ_TOKENIZE_READ_AND_JUMP(46);
             }
             else if (c == '%') {
-                read_char = 1;
-                state = 53;
+                LIQ_TOKENIZE_READ_AND_JUMP(53);
             }
             else {
                 goto unexpected;
@@ -4069,17 +3889,12 @@ liq_tokenize(SV *source)
         case 53:
             /* \{%\s*cycle\s*(?:$CYCLEVALUE\s*:\s*)?
              *                $CYCLEVALUE\s*(?:,\s*$CYCLEVALUE\s*)*%_\}\n? */
-            read_char = 1;
-            if (c == '}') {
-                liq_tokenize_cycle_group(node, u8src);
-
-                pplain = psrc;
-                plain_start = pos;
-                state = 54;
-            }
-            else {
+            if (c != '}')
                 goto unexpected;
-            }
+            liq_tokenize_cycle_group(node, u8src);
+            pplain = psrc;
+            plain_start = pos;
+            LIQ_TOKENIZE_READ_AND_JUMP(54);
             break;
         case 54:
             /* \{%\s*cycle\s*(?:$CYCLEVALUE\s*:\s*)?
@@ -4087,9 +3902,11 @@ liq_tokenize(SV *source)
             if (c == '\n') {
                 pplain = psrc;
                 plain_start = pos;
-                read_char = 1;
+                LIQ_TOKENIZE_READ_AND_JUMP(0);
             }
-            state = 0;
+            else {
+                LIQ_TOKENIZE_PEEK_AND_JUMP(0);
+            }
             break;
         }
     }
@@ -4099,33 +3916,16 @@ liq_tokenize(SV *source)
      * }
      */
     if (esrc > pplain) {
-        n = esrc - pplain;
-        token = newAV();
-        av_push(tokens, newRV_noinc((SV *)token));
-        av_push(token, newSViv(LIQ_PLAIN));
-        node = newAV();
-        av_push(token, newRV_noinc((SV *)node));
-        av_push(node, newSViv(LIQ_PLAIN));
-        av_push(node, newSVpvn_utf8(pplain, n, u8src));
-        av_push(token, newSViv(plain_start));
+        LIQ_TOKENIZEpvnu8(LIQ_PLAIN, pplain, esrc, plain_start);
     }
-
     /* push @token_list, [EOF, EOF]; */
-    token = newAV();
-    av_push(tokens, newRV_noinc((SV *)token));
-    av_push(token, newSViv(LIQ_EOF));
-    av_push(token, newSViv(LIQ_EOF));
-    av_push(token, newSViv(pos));
+    LIQ_TOKENIZEiv(LIQ_EOF, LIQ_EOF, pos);
 
     return (SV *)newRV_inc((SV *)tokens);
 
 unexpected:
     av_clear(tokens);
-    token = newAV();
-    av_push(tokens, newRV_noinc((SV *)token));
-    av_push(token, newSViv(LIQ_ERROR));
-    av_push(token, newSVpv("SyntaxError: scanner.", 0));
-    av_push(token, newSViv(token_start));
+    LIQ_TOKENIZEx(LIQ_ERROR, newSVpv("SyntaxError: scanner.", 0), token_start);
 
     return (SV *)newRV_inc((SV *)tokens);
 }
