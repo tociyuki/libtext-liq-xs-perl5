@@ -42,7 +42,6 @@ static void liq_unshift_symbols(AV *stack, IV n, ...);
 #define LIQ_REVERSED          24
 #define LIQ_BREAK             25
 #define LIQ_CONTINUE          26
-#define LIQ_WITH              27
 /* Template symbols (overrap Terminal symbols) and token values */
 #define LIQ_EQ                27
 #define LIQ_NE                28
@@ -56,6 +55,7 @@ static void liq_unshift_symbols(AV *stack, IV n, ...);
 #define LIQ_BEGIN             35
 
 /* Terminal symbols and token kinds */
+#define LIQ_WITH              27
 #define LIQ_EQUIV             28
 #define LIQ_IN                29
 #define LIQ_DOT               30
@@ -3090,7 +3090,7 @@ liq_tokenize(SV *source)
 #if defined(utf8_to_uvchr_buf)
                     c = utf8_to_uvchr_buf(psrc, esrc, &u8skip);
 #else
-                    c = utf8_to_uvchr(s, &u8skip);
+                    c = utf8_to_uvchr(psrc, &u8skip);
 #endif
                     psrc += u8skip;
                 }
@@ -4004,7 +4004,7 @@ liq_trim_spaces(SV *source)
 #if defined(utf8_to_uvchr_buf)
         c = utf8_to_uvchr_buf(psrc, esrc, &u8skip);
 #else
-        c = utf8_to_uvchr(s, &u8skip);
+        c = utf8_to_uvchr(psrc, &u8skip);
 #endif
         if (! isSPACE_uni(c))
             sv_catpvn(result, psrc, u8skip);
