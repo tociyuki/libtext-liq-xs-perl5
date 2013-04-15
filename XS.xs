@@ -4,6 +4,10 @@
 
 #include "ppport.h"
 
+#if !defined(utf8_to_uvchr_buf)
+#  define utf8_to_uvchr_buf(x,y,z) utf8_to_uvchr(x,z)
+#endif
+
 /* LIQK_TRACE 0: do nothing 1: print parser stack for debug */
 #define LIQK_TRACE  0
 
@@ -3087,11 +3091,7 @@ liq_tokenize(SV *source)
                 }
                 else {
                     STRLEN u8skip;
-#if defined(utf8_to_uvchr_buf)
                     c = utf8_to_uvchr_buf(psrc, esrc, &u8skip);
-#else
-                    c = utf8_to_uvchr(psrc, &u8skip);
-#endif
                     psrc += u8skip;
                 }
                 pos++;
@@ -4001,11 +4001,7 @@ liq_trim_spaces(SV *source)
 
     result = newSVpvn_utf8("", 0, u8src);
     while (psrc < esrc) {
-#if defined(utf8_to_uvchr_buf)
         c = utf8_to_uvchr_buf(psrc, esrc, &u8skip);
-#else
-        c = utf8_to_uvchr(psrc, &u8skip);
-#endif
         if (! isSPACE_uni(c))
             sv_catpvn(result, psrc, u8skip);
         psrc += u8skip;
