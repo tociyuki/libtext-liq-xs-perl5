@@ -164,6 +164,45 @@ typedef IV (*liq_nonteminal_rule_t)(AV *, IV);
 #define LIQK_NONTERM_FIRST LIQ_block
 #define LIQK_NONTERM_LAST  LIQ_when_values
 
+/* Double Array Trie of markups */
+#define LIQ_TRIE_MARKUP_SIZE     143
+
+static IV liq_markup_base[LIQ_TRIE_MARKUP_SIZE] = {
+     -1,   0, -12,  -4,  19,  46,  48,  87, -11,   1,
+     99,   4,  -2,  13, LIQ_ASSIGN,  10,  15,   6,  19, 128,
+    LIQ_BREAK,  6,  118,   4, 130,   5,  25,   9,  23,  29,
+    LIQ_CAPTURE,  31, LIQ_CASE,  22,  20,  19,  31,  23,  18,  39,
+    LIQ_COMMENT,  32,  28,  22,  40,  44,  46, LIQ_CONTINUE,  36,  44,
+     50, LIQ_CYCLE,  49,  35,  49,  42,  51,  43,  38,  59,
+    LIQ_DECREMENT,  42,  58,  64,  64, LIQ_ELSE,  66, LIQ_ELSIF,  59,  66,
+     69,  55,  53,  67,  55,  75,  79,  59,  73,  79,
+    LIQ_ENDCAPTURE,  81, LIQ_ENDCASE,  65,  84, LIQ_ENDFOR, 
+                             86, LIQ_ENDIF,  82,  89,
+     80,  77,  85,  88,  90,  95, LIQ_ENDIFCHANGED,  85,  93,  80,
+     81, 101, LIQ_ENDUNLESS,  85, 104, LIQ_FOR, 106,  LIQ_IF, 107,  96,
+     99, 104, 107, 110, 113, 115, LIQ_IFCHANGED, 105,  97, 115,
+     115, 121, LIQ_INCLUDE, 111, 117, 120, 112, 107, 128, LIQ_INCREMENT,
+     107, 131, LIQ_RAW, 121, 129, 116, 117, 137, LIQ_UNLESS, 134,
+     126, 141, LIQ_WHEN
+};
+static IV liq_markup_check[LIQ_TRIE_MARKUP_SIZE] = {
+     -1,   0,   1,   1,   1,   1,   1,   1,   2,   8,
+      1,   9,  11,  12,  13,   3,  15,  16,  17,   1,
+     18,   4,   1,  21,   1,  23,  21,  25,  27,  28,
+     29,  26,  31,  35,  35,   4,  33,  36,  37,  38,
+     39,  34,  41,  42,  43,   4,  44,  46,  45,  48,
+     49,  50,   5,  52,  53,  54,  55,  56,  57,  58,
+     59,   6,  61,   6,  62,  64,  68,  66,  62,  63,
+     69,  70,  71,  69,  72,  71,  69,  74,  77,  78,
+     79,  75,  81,  73,  83,  84,  76,  86,  69,  90,
+     86,  89,  91,  92,  93,  94,  95,  88,  97,  98,
+     99, 100, 101,   7, 103, 104,  10, 106, 110, 108,
+    106, 109, 111, 112,  10, 113, 115, 114, 117, 118,
+    119, 120, 121, 124, 117, 123, 125, 126, 127, 128,
+     19, 130, 131,  22, 133, 134, 135, 136, 137,  24,
+     139, 140, 141
+};
+
 /* 
  * For Liquid markups, Text-Liq-XS uses an attribute grammar
  * in LL(1) syntax. On such the class of grammars, we can parse inputs
@@ -2989,6 +3028,7 @@ liq_tokenize(SV *source)
     U8 *pliteral, *eliteral;
     IV pos, plain_start, token_start; /* character position not byte index */
     IV token_kind, token_value;
+    IV markup_b, markup_b_next;
 
 #define LIQ_TOKENIZE_READ_AND_JUMP(j) read_char = 1; state = j
 #define LIQ_TOKENIZE_PEEK_AND_JUMP(j) read_char = 0; state = j
@@ -3115,6 +3155,7 @@ liq_tokenize(SV *source)
                 LIQ_TOKENIZE_READ_AND_JUMP(2);  /* (.*?)\{_\{ */
             }
             else if (c == '%') {
+                markup_b = 1;
                 LIQ_TOKENIZE_READ_AND_JUMP(3);  /* (.*?)\{_% */
             }
             else {
@@ -3135,109 +3176,26 @@ liq_tokenize(SV *source)
             LIQ_TOKENIZE_SPACE_STAR(4); /* (.*?)\{%_\s* */
             break;
         case 4:
-            LIQ_TOKENIZE_PEEK_AND_JUMP(0);  /* default */
-            switch (c) {
-            case 'a':
-                if (LIQ_TOKENIZE_IS_MARKUP("ssign", 5)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(5, LIQ_ASSIGN, 5);
+            LIQ_TOKENIZE_PEEK_AND_JUMP(0);
+            if (c >= 'a' && c <= 'z')  {
+                markup_b_next = liq_markup_base[markup_b] + c - 'a' + 2;
+                if (markup_b_next > 0 && markup_b_next < LIQ_TRIE_MARKUP_SIZE
+                        && liq_markup_check[markup_b_next] == markup_b) {
+                    markup_b = markup_b_next;
+                    LIQ_TOKENIZE_READ_AND_JUMP(4);
                 }
-                break;
-            case 'b':
-                if (LIQ_TOKENIZE_IS_MARKUP("reak", 4)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(4, LIQ_BREAK, 6);
+            }
+            else if (! isALNUM_uni(c)) {
+                markup_b_next = liq_markup_base[markup_b] + 1;
+                if (markup_b_next > 0 && markup_b_next < LIQ_TRIE_MARKUP_SIZE
+                        && liq_markup_check[markup_b_next] == markup_b) {
+                    token_kind = liq_markup_base[markup_b_next];
+                    LIQ_TOKENIZE_PEEK_AND_JUMP(5);
                 }
-                break;
-            case 'c':
-                if (LIQ_TOKENIZE_IS_MARKUP("ase", 3)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(3, LIQ_CASE, 5);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("apture", 6)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(6, LIQ_CAPTURE, 6);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("ontinue", 7)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(7, LIQ_CONTINUE, 6);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("ycle", 4)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(4, LIQ_CYCLE, 5);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("omment", 6)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(6, LIQ_COMMENT, 6);
-                }
-                break;
-            case 'd':
-                if (LIQ_TOKENIZE_IS_MARKUP("ecrement", 8)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(8, LIQ_DECREMENT, 5);
-                }
-                break;
-            case 'e':
-                if (LIQ_TOKENIZE_IS_MARKUP("lsif", 4)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(4, LIQ_ELSIF, 5);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("lse", 3)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(3, LIQ_ELSE, 6);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("ndcase", 6)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(6, LIQ_ENDCASE, 6);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("ndfor", 5)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(5, LIQ_ENDFOR, 6);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("ndifchanged", 11)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(11, LIQ_ENDIFCHANGED, 6);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("ndif", 4)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(4, LIQ_ENDIF, 6);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("ndcapture", 9)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(9, LIQ_ENDCAPTURE, 6);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("ndunless", 8)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(8, LIQ_ENDUNLESS, 6);
-                }
-                break;
-            case 'f':
-                if (LIQ_TOKENIZE_IS_MARKUP("or", 2)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(2, LIQ_FOR, 5);
-                }
-                break;
-            case 'i':
-                if (LIQ_TOKENIZE_IS_MARKUP("fchanged", 8)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(8, LIQ_IFCHANGED, 6);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("f", 1)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(1, LIQ_IF, 5);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("ncrement", 8)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(8, LIQ_INCREMENT, 5);
-                }
-                else if (LIQ_TOKENIZE_IS_MARKUP("nclude", 6)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(6, LIQ_INCLUDE, 5);
-                }
-                break;
-            case 'r':
-                if (LIQ_TOKENIZE_IS_MARKUP("aw", 2)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(2, LIQ_RAW, 6);
-                }
-                break;
-            case 'u':
-                if (LIQ_TOKENIZE_IS_MARKUP("nless", 5)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(5, LIQ_UNLESS, 5);
-                }
-                break;
-            case 'w':
-                if (LIQ_TOKENIZE_IS_MARKUP("hen", 3)) {
-                    LIQ_TOKENIZE_MARKUP_AND_JUMP(3, LIQ_WHEN, 5);
-                }
-                break;
             }
             break;
         case 5:
-            if (isSPACE_uni(c)) {
-                LIQ_TOKENIZE_READ_AND_JUMP(6);  /* \{%\s*\w+_\s */
-            }
-            else {
-                LIQ_TOKENIZE_PEEK_AND_JUMP(0);  /* \{%\s*\w+_\S */
-            }
+            LIQ_TOKENIZE_SPACE_STAR(6); /* (.*?)\{%\s*\w+_\s* */
             break;
         case 6:
             if (pplain < eplain) {
