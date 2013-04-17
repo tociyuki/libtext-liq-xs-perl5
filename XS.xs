@@ -164,26 +164,51 @@ typedef IV (*liq_nonteminal_rule_t)(AV *, IV);
 #define LIQK_NONTERM_FIRST LIQ_block
 #define LIQK_NONTERM_LAST  LIQ_when_values
 
-/* Double Array Trie of markups */
+/* generated `perl make_damarkup.pl` */
+/* Double Array Trie of markups
+ *
+ *       assign | break | capture | case | comment | continue | cycle
+ *     | else | elsif | endcapture | endcase | endfor | endif
+ *     | endunless | for | if | ifchanged | include | increment | raw
+ *     | when
+ *
+ * initial state starts from 1.
+ * next state s1 from s0.
+ *
+ *      assert(c >= 'a' && c <= 'z');
+ *      s1 = liq_markup_base[s0] + c - 'a' + 2;
+ *      if (liq_markup_check[s1] == s0)
+ *          valid s1
+ *      else
+ *          undefined transition.
+ *
+ * for end of string (do not forget this!).
+ *
+ *      s1 = liq_markup_base[s0] + 1;
+ *      if (liq_markup_check[s1] == s0)
+ *          token_kind = liq_markup_base[s1];
+ *      else
+ *          undefined transition.
+ */
 #define LIQ_TRIE_MARKUP_SIZE     143
 
 static IV liq_markup_base[LIQ_TRIE_MARKUP_SIZE] = {
      -1,   0, -12,  -4,  19,  46,  48,  87, -11,   1,
      99,   4,  -2,  13, LIQ_ASSIGN,  10,  15,   6,  19, 128,
-    LIQ_BREAK,  6,  118,   4, 130,   5,  25,   9,  23,  29,
+    LIQ_BREAK,   6, 118,   4, 130,   5,  25,   9,  23,  29,
     LIQ_CAPTURE,  31, LIQ_CASE,  22,  20,  19,  31,  23,  18,  39,
     LIQ_COMMENT,  32,  28,  22,  40,  44,  46, LIQ_CONTINUE,  36,  44,
      50, LIQ_CYCLE,  49,  35,  49,  42,  51,  43,  38,  59,
     LIQ_DECREMENT,  42,  58,  64,  64, LIQ_ELSE,  66, LIQ_ELSIF,  59,  66,
      69,  55,  53,  67,  55,  75,  79,  59,  73,  79,
-    LIQ_ENDCAPTURE,  81, LIQ_ENDCASE,  65,  84, LIQ_ENDFOR, 
-                             86, LIQ_ENDIF,  82,  89,
+    LIQ_ENDCAPTURE,  81, LIQ_ENDCASE,  65,  84,
+                LIQ_ENDFOR,  86, LIQ_ENDIF,  82,  89,
      80,  77,  85,  88,  90,  95, LIQ_ENDIFCHANGED,  85,  93,  80,
-     81, 101, LIQ_ENDUNLESS,  85, 104, LIQ_FOR, 106,  LIQ_IF, 107,  96,
+     81, 101, LIQ_ENDUNLESS,  85, 104, LIQ_FOR, 106, LIQ_IF, 107,  96,
      99, 104, 107, 110, 113, 115, LIQ_IFCHANGED, 105,  97, 115,
-     115, 121, LIQ_INCLUDE, 111, 117, 120, 112, 107, 128, LIQ_INCREMENT,
-     107, 131, LIQ_RAW, 121, 129, 116, 117, 137, LIQ_UNLESS, 134,
-     126, 141, LIQ_WHEN
+    115, 121, LIQ_INCLUDE, 111, 117, 120, 112, 107, 128, LIQ_INCREMENT,
+    107, 131, LIQ_RAW, 121, 129, 116, 117, 137, LIQ_UNLESS, 134,
+    126, 141, LIQ_WHEN
 };
 static IV liq_markup_check[LIQ_TRIE_MARKUP_SIZE] = {
      -1,   0,   1,   1,   1,   1,   1,   1,   2,   8,
@@ -200,7 +225,7 @@ static IV liq_markup_check[LIQ_TRIE_MARKUP_SIZE] = {
     106, 109, 111, 112,  10, 113, 115, 114, 117, 118,
     119, 120, 121, 124, 117, 123, 125, 126, 127, 128,
      19, 130, 131,  22, 133, 134, 135, 136, 137,  24,
-     139, 140, 141
+    139, 140, 141
 };
 
 /* 

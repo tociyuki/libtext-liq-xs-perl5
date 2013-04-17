@@ -5,6 +5,7 @@ README
 XS.xs
 lib/Text/Liq/XS.pm
 ppport.h
+make_damarkup.pl
 t/00.load.t
 t/01.assign.t
 t/02.capture.t
