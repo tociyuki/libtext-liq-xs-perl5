@@ -30,7 +30,7 @@ sub any {
 sub make_array {
     my(@words) = @_;
     my @keylist = map { $_ . $EOS } sort @words;
-    @base = (-1, 1);
+    @base = (-1, 0);
     @check = (-1, 0);
     my @stack = (\@keylist, 0, 1);
     while (@stack) {
@@ -106,7 +106,7 @@ $commentlines *
 
 static IV liq_markup_base[LIQ_TRIE_MARKUP_SIZE] = {
 EOS
-my $i = 0;
+$i = 0;
 while ($i < @base) {
     my $j = $i + 9 < $#base ? $i + 9 : $#base;
     print q(    ), (join q(, ), @base[$i .. $j]), ",\n";

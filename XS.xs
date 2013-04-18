@@ -138,28 +138,31 @@ typedef void (*liq_grammar_action_t)(AV *);
 typedef IV (*liq_nonteminal_rule_t)(AV *, IV);
 
 #define LIQ_block             88
-#define LIQ_else_clause       89
-#define LIQ_elsif_clauses     90
-#define LIQ_expression        91
-#define LIQ_expression1       92
-#define LIQ_expression2       93
-#define LIQ_expression3       94
-#define LIQ_expression4       95
-#define LIQ_filter_arguments  96
-#define LIQ_filter_comma_arguments 97
-#define LIQ_for_list          98
-#define LIQ_for_offset        99
-#define LIQ_for_slice        100
-#define LIQ_include_arguments 101
-#define LIQ_include_comma    102
-#define LIQ_include_with     103
-#define LIQ_pipeline         104
-#define LIQ_plains           105
-#define LIQ_selectors        106
-#define LIQ_value            107
-#define LIQ_variable         108
-#define LIQ_when_clauses     109
-#define LIQ_when_values      110
+#define LIQ_if_else_clause    89
+#define LIQ_case_else_clause  90
+#define LIQ_for_else_clause   91
+#define LIQ_else_clause       92
+#define LIQ_elsif_clauses     93
+#define LIQ_expression        94
+#define LIQ_expression1       95
+#define LIQ_expression2       96
+#define LIQ_expression3       97
+#define LIQ_expression4       98
+#define LIQ_filter_arguments  99
+#define LIQ_filter_comma_arguments 100
+#define LIQ_for_list         101
+#define LIQ_for_offset       102
+#define LIQ_for_slice        103
+#define LIQ_include_arguments 104
+#define LIQ_include_comma    105
+#define LIQ_include_with     106
+#define LIQ_pipeline         107
+#define LIQ_plains           108
+#define LIQ_selectors        109
+#define LIQ_value            110
+#define LIQ_variable         111
+#define LIQ_when_clauses     112
+#define LIQ_when_values      113
 
 #define LIQK_NONTERM_FIRST LIQ_block
 #define LIQK_NONTERM_LAST  LIQ_when_values
@@ -298,21 +301,19 @@ static IV liq_markup_check[LIQ_TRIE_MARKUP_SIZE] = {
  *
  *  block
  *    :
- *    | PLAIN block
+ *    | PLAIN {append }block
  *    | ESCAPE   value {make_escape} pipeline RR  {append_first} block
  *    | NOESCAPE value {make_escape} pipeline RRR {append_first} block
  *    | ASSIGN variable EQUIV value {make_assign}
  *      pipeline R {append_first} block
  *    | IF {make_if} expression R {append_first} block
- *      elsif_clauses else_clause ENDIF R {end_node} block
+ *      elsif_clauses if_else_clause ENDIF R {end_node} block
  *    | UNLESS {make_if} expression {flip_unless} R {append_first} block
- *      elsif_clauses else_clause ENDUNLESS R {end_node} block
- *    | CASE value R {make_case} plains when_clauses else_clause
- *      ENDCASE R {end_node} block
- *    | CASE value R {make_case} plains when_clauses else_clause
+ *      elsif_clauses if_else_clause ENDUNLESS R {end_node} block
+ *    | CASE value R {make_case} plains when_clauses case_else_clause
  *      ENDCASE R {end_node} block
  *    | FOR variable IN {srcmark} for_list {srcyank} {make_for}
- *      for_slice R {append_for_slice} block else_clause
+ *      for_slice R {append_for_slice} block for_else_clause
  *      ENDFOR R {end_node} block
  *    | CAPTURE variable {make_capture} pipeline R {append_first} block
  *      ENDCAPTURE R {end_node} block
@@ -356,20 +357,20 @@ liq_rule_block(AV *stack, IV next_token)
         liq_unshift_symbols(stack, 12,
             LIQ_IF, LIQ__make_if,
             LIQ_expression, LIQ_R, LIQ__append_first, LIQ_block,
-            LIQ_elsif_clauses, LIQ_else_clause,
+            LIQ_elsif_clauses, LIQ_if_else_clause,
             LIQ_ENDIF, LIQ_R, LIQ__end_node, LIQ_block);
         break;
     case LIQ_UNLESS:
         liq_unshift_symbols(stack, 13,
             LIQ_UNLESS, LIQ__make_if,
             LIQ_expression, LIQ__flip_unless, LIQ_R, LIQ__append_first, LIQ_block,
-            LIQ_elsif_clauses, LIQ_else_clause,
+            LIQ_elsif_clauses, LIQ_if_else_clause,
             LIQ_ENDUNLESS, LIQ_R, LIQ__end_node, LIQ_block);
         break;
     case LIQ_CASE:
         liq_unshift_symbols(stack, 11,
             LIQ_CASE, LIQ_value, LIQ_R, LIQ__make_case, LIQ_plains,
-            LIQ_when_clauses, LIQ_else_clause,
+            LIQ_when_clauses, LIQ_case_else_clause,
             LIQ_ENDCASE, LIQ_R, LIQ__end_node, LIQ_block);
         break;
     case LIQ_FOR:
@@ -377,7 +378,7 @@ liq_rule_block(AV *stack, IV next_token)
             LIQ_FOR, LIQ_variable, LIQ_IN,
             LIQ__srcmark, LIQ_for_list, LIQ__srcyank, LIQ__make_for,
             LIQ_for_slice, LIQ_R, LIQ__append_for_slice, LIQ_block,
-            LIQ_else_clause,
+            LIQ_for_else_clause,
             LIQ_ENDFOR, LIQ_R, LIQ__end_node, LIQ_block);
         break;
     case LIQ_CAPTURE:
@@ -1564,10 +1565,88 @@ liq_make_when(AV *output)
     av_push(alt, value);
 }
 
+/* LIQ_if_else_clause nonterminal rules
+ *
+ *  if_else_clause
+ *      :
+ *      | else_clause
+ */
+static
+IV
+liq_rule_if_else_clause(AV *stack, IV next_token)
+{
+    IV ok = 1;
+
+    switch (next_token) {
+    case LIQ_ELSE:
+        liq_unshift_symbols(stack, 1,
+            LIQ_else_clause);
+        break;
+    case LIQ_ENDIF:
+    case LIQ_ENDUNLESS:
+        /* empty */;
+        break;
+    default:
+        ok = 0;
+    }
+    return ok;
+}
+
+/* LIQ_case_else_clause nonterminal rules
+ *
+ *  case_else_clause
+ *      :
+ *      | else_clause
+ */
+static
+IV
+liq_rule_case_else_clause(AV *stack, IV next_token)
+{
+    IV ok = 1;
+
+    switch (next_token) {
+    case LIQ_ELSE:
+        liq_unshift_symbols(stack, 1,
+            LIQ_else_clause);
+        break;
+    case LIQ_ENDCASE:
+        /* empty */;
+        break;
+    default:
+        ok = 0;
+    }
+    return ok;
+}
+
+/* LIQ_for_else_clause nonterminal rules
+ *
+ *  for_else_clause
+ *      :
+ *      | else_clause
+ */
+static
+IV
+liq_rule_for_else_clause(AV *stack, IV next_token)
+{
+    IV ok = 1;
+
+    switch (next_token) {
+    case LIQ_ELSE:
+        liq_unshift_symbols(stack, 1,
+            LIQ_else_clause);
+        break;
+    case LIQ_ENDFOR:
+        /* empty */;
+        break;
+    default:
+        ok = 0;
+    }
+    return ok;
+}
+
 /* LIQ_else_clause nonterminal rules
  *
- *  else_clause :
- *              | ELSE R {make_else} block
+ *  else_clause : ELSE R {make_else} block
  */
 static
 IV
@@ -1579,12 +1658,6 @@ liq_rule_else_clause(AV *stack, IV next_token)
     case LIQ_ELSE:
         liq_unshift_symbols(stack, 4,
             LIQ_ELSE, LIQ_R, LIQ__make_else, LIQ_block);
-        break;
-    case LIQ_ENDIF:
-    case LIQ_ENDUNLESS:
-    case LIQ_ENDFOR:
-    case LIQ_ENDCASE:
-        /* empty */;
         break;
     default:
         ok = 0;
@@ -2136,7 +2209,7 @@ liq_set_offset_value(AV *output)
 /* LIQ_when_values nonterminal rules
  *
  *  when_values : OR    value {append_second} when_values
- *  when_values : COMMA value {append_second} when_values
+ *              | COMMA value {append_second} when_values
  */
 static
 IV
@@ -2764,6 +2837,9 @@ liq_append_second3(AV *output)
 static
 liq_nonteminal_rule_t liq_nonteminal_rules[] = {
     liq_rule_block,
+    liq_rule_if_else_clause,
+    liq_rule_case_else_clause,
+    liq_rule_for_else_clause,
     liq_rule_else_clause,
     liq_rule_elsif_clauses,
     liq_rule_expression,
