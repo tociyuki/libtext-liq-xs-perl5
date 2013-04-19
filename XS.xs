@@ -2208,7 +2208,8 @@ liq_set_offset_value(AV *output)
 
 /* LIQ_when_values nonterminal rules
  *
- *  when_values : OR    value {append_second} when_values
+ *  when_values :
+ *              | OR    value {append_second} when_values
  *              | COMMA value {append_second} when_values
  */
 static
