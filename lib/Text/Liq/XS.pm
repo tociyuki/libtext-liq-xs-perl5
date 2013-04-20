@@ -20,8 +20,8 @@ my(# template symbols
     $FOR, $IF, $UNLESS, $ELSE, $IFCHANGED, $CYCLE, $FILTER,
     $OR, $AND, $NOT, $RANGE, $REVERSED, $BREAK, $CONTINUE,
     $EQ, $NE, $LT, $LE, $GT, $GE, $CONTAINS, $VARIABLE, $BEGIN,
-) = (0 .. 35);
-my $ERROR = 52;
+) = (1 .. 36);
+my $ERROR = 53;
 
 sub parse {
     my($class, $source) = @_;
