@@ -4,7 +4,7 @@
 
 #include "ppport.h"
 
-#if !defined(utf8_to_uvchr_buf)
+#ifndef utf8_to_uvchr_buf
 #  define utf8_to_uvchr_buf(x,y,z) utf8_to_uvchr(x,z)
 #endif
 
