@@ -274,10 +274,9 @@ static IV liq_markup_check[LIQ_TRIE_MARKUP_SIZE] = {
  *      (LIQ_ESCAPE, LIQ_value, LIQ__make_escape, LIQ_pipeline, LIQ_RR
  *       LIQ__append_first, LIQ_block, @K)
  *
- * For empty right hand side expression of product, the continuations list
+ * For empty right hand side expression of product, the control list
  * is not changed when the lookup token is the terminal element contained
- * the follow set of the nonterminal. In this case, the parser pushs a token
- * value on the output stack too.
+ * the follow set of the nonterminal.
  *
  * For example.
  *
@@ -292,9 +291,9 @@ static IV liq_markup_check[LIQ_TRIE_MARKUP_SIZE] = {
  *
  * we get next state.
  *
- *      C: (@INPUTS)
- *      E: (@OUTPUTS, [@blocks], ELSIF)
- *      K: (block, @K)
+ *      C: (ELSIF, @INPUTS)
+ *      E: (@OUTPUTS, [@blocks])
+ *      K: (@K)
  */
 
 /* LIQ_block nonterminal rules
@@ -3088,7 +3087,7 @@ liq_tokenize_cycle_group(AV *node, IV u8src)
 
 /**
  * tokenizes a given string source. The source might be UTF-8 encoding.
- * This is a Nondeterministic Finite Automaton (DFA) from following
+ * This is a Nondeterministic Finite Automaton (NFA) from following
  * double loop perl's tokenizer used in Text::Liq module.
  * 
  *  while($src =~ m{\G(.*?)(?:(\{\{\{?)\s*|\{%\s*(\w+)\s*)}gcmsx) {
@@ -3994,8 +3993,8 @@ unexpected:
  * takes a part of PV string from character position fromsrc
  * following character lengths n.
  * When source SV gets the UTF-8 encoding,
- * both the character position and charcter length mean
- * not byte's them but multi-byte character's them.
+ * both the character position and charcter length do not mean
+ * byte's them but multi-byte character's them.
  * When source SV gets the LATIN1 encoding or bytes buffer,
  * both of them mean just byte's them.
  *
